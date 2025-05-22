@@ -1,48 +1,66 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-import os
 from urllib.parse import urljoin
-from pathlib import Path
+import zipfile
+import io
 
-st.title("📂 PPSC Jobs Archive Downloader")
+st.title("📄 Download PPSC Archive PDFs as ZIP")
 
 ARCHIVE_URL = "https://ppsc.gop.pk/(S(la4uc2xgwe1vrbe1izlshhhw))/JobsArchive.aspx"
 BASE_URL = "https://ppsc.gop.pk/"
 
 @st.cache_data(show_spinner=False)
-def get_file_links():
-    response = requests.get(ARCHIVE_URL)
+def get_pdf_links():
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
+    }
+    try:
+        response = requests.get(ARCHIVE_URL, headers=headers, timeout=20)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Failed to fetch page: {e}")
+        return []
+
     soup = BeautifulSoup(response.content, "html.parser")
     links = soup.find_all("a", href=True)
 
-    file_links = []
+    pdf_links = []
     for link in links:
         href = link["href"]
-        if any(href.lower().endswith(ext) for ext in [".pdf", ".doc", ".docx"]):
+        if href.lower().endswith(".pdf"):
             full_url = urljoin(BASE_URL, href)
-            file_links.append((link.text.strip(), full_url))
-    return file_links
+            filename = full_url.split("/")[-1]
+            pdf_links.append((filename, full_url))
+    return pdf_links
 
-files = get_file_links()
+pdf_files = get_pdf_links()
 
-if not files:
-    st.warning("No downloadable files found.")
+if not pdf_files:
+    st.warning("No PDF files found.")
 else:
-    st.success(f"Found {len(files)} files.")
-    download_dir = Path("downloads")
-    download_dir.mkdir(exist_ok=True)
+    st.success(f"Found {len(pdf_files)} PDF files.")
 
-    for name, url in files:
-        filename = url.split("/")[-1]
-        filepath = download_dir / filename
+    # ZIP buffer for all PDF files
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
+        for filename, url in pdf_files:
+            try:
+                file_resp = requests.get(url, timeout=15)
+                file_resp.raise_for_status()
+                zipf.writestr(filename, file_resp.content)
+            except Exception as e:
+                st.warning(f"Skipped {filename}: {e}")
 
-        if not filepath.exists():
-            r = requests.get(url)
-            with open(filepath, "wb") as f:
-                f.write(r.content)
+    zip_buffer.seek(0)
 
-        with open(filepath, "rb") as f:
-            st.download_button(label=f"📥 Download {filename}", data=f, file_name=filename)
-
-    st.info("All files saved in 'downloads/' folder.")
+    st.download_button(
+        label="📦 Download All PDFs as ZIP",
+        data=zip_buffer,
+        file_name="PPSC_PDF_Archive.zip",
+        mime="application/zip"
+    )
